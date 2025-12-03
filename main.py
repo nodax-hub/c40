@@ -12,6 +12,9 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from enum import Enum
+from typing import Deque
+from typing import List
 
 import pigpio
 import smbus2
@@ -307,8 +310,6 @@ class MavlinkConnectionService:
 # ------------------------------------------------------------
 # Дверь/защелки
 # ------------------------------------------------------------
-from enum import Enum
-from typing import List, Deque
 
 
 class LatchState(Enum):
@@ -317,70 +318,61 @@ class LatchState(Enum):
     ERROR = "error"
 
 
-maxsize: int = 10
-
-
-from dataclasses import dataclass, field
-from collections import deque
-from typing import Deque
-
-
 @dataclass
 class Latch:
-    dt: float  # период обновления (секунды)
-    dur: float  # требуемое время стабильности (секунды)
+    dt: float
+    dur: float
 
     _open_queue: Deque[bool] = field(init=False)
     _close_queue: Deque[bool] = field(init=False)
 
+    _open_state: bool = field(default=False, init=False)
+    _close_state: bool = field(default=False, init=False)
+
     def __post_init__(self):
-        # рассчитываем длину окна
         maxlen = int(self.dur / self.dt)
         if maxlen < 1:
-            maxlen = 1  # защита от нулевого окна
+            maxlen = 1
 
         self._open_queue = deque(maxlen=maxlen)
         self._close_queue = deque(maxlen=maxlen)
 
     def set_state(self, open_limit: bool, close_limit: bool):
-        """
-        Добавляет новые значения в очереди.
-        """
         self._open_queue.append(open_limit)
         self._close_queue.append(close_limit)
 
+        # Проверяем окно open
+        if len(self._open_queue) == self._open_queue.maxlen:
+            if all(self._open_queue):
+                self._open_state = True
+            elif not any(self._open_queue):
+                self._open_state = False
+            # иначе состояние не меняем
+
+        # Проверяем окно close
+        if len(self._close_queue) == self._close_queue.maxlen:
+            if all(self._close_queue):
+                self._close_state = True
+            elif not any(self._close_queue):
+                self._close_state = False
+            # иначе состояние не меняем
+
     @property
     def open_limit(self) -> bool:
-        """
-        Фильтрация majority vote.
-        """
-        q = self._open_queue
-        if not q:
-            return False
-
-        true_count = sum(q)
-        false_count = len(q) - true_count
-        return true_count >= false_count
+        return self._open_state
 
     @property
     def close_limit(self) -> bool:
-        q = self._close_queue
-        if not q:
-            return False
+        return self._close_state
 
-        true_count = sum(q)
-        false_count = len(q) - true_count
-        return true_count >= false_count
-
-    def get_state(self) -> "LatchState":
-        o = self.open_limit
-        c = self.close_limit
+    def get_state(self):
+        o = self._open_state
+        c = self._close_state
 
         if o and not c:
             return LatchState.OPEN
         elif not o and c:
             return LatchState.CLOSED
-
         return LatchState.ERROR
 
 
@@ -426,7 +418,7 @@ if __name__ == "__main__":
     temp_sensor.start()
 
     dt = 0.1
-    l1 = Latch(dt=dt,dur=1.5)
+    l1 = Latch(dt=dt, dur=1.5)
     l2 = Latch(dt=dt, dur=1.5)
 
     door = Door([l1, l2])
