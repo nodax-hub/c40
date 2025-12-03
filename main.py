@@ -11,7 +11,7 @@ import struct
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pigpio
 import smbus2
@@ -308,7 +308,7 @@ class MavlinkConnectionService:
 # Дверь/защелки
 # ------------------------------------------------------------
 from enum import Enum
-from typing import List
+from typing import List, Deque
 
 
 class LatchState(Enum):
@@ -317,16 +317,59 @@ class LatchState(Enum):
     ERROR = "error"
 
 
+maxsize: int = 10
+
+
 @dataclass
 class Latch:
-    open_limit: bool
-    close_limit: bool
+    # Очереди для фильтрации каждого канала
+    _open_queue: Deque[bool] = field(default_factory=lambda: deque(maxlen=maxsize))
+    _close_queue: Deque[bool] = field(default_factory=lambda: deque(maxlen=maxsize))
 
-    def get_state(self) -> LatchState:
-        if self.open_limit and not self.close_limit:
+    def set_state(self, open_limit: bool, close_limit: bool):
+        """
+        Сеттер состояния: добавляет новые значения в очереди.
+        """
+        self._open_queue.append(open_limit)
+        self._close_queue.append(close_limit)
+
+    @property
+    def open_limit(self) -> bool:
+        """
+        Вычисляет устойчивое состояние open_limit на основе очереди.
+        Возвращает большинство значений.
+        """
+        if not self._open_queue:
+            return False
+
+        true_count = sum(self._open_queue)
+        false_count = len(self._open_queue) - true_count
+        return true_count >= false_count
+
+    @property
+    def close_limit(self) -> bool:
+        """
+        Аналогично open_limit.
+        """
+        if not self._close_queue:
+            return False
+
+        true_count = sum(self._close_queue)
+        false_count = len(self._close_queue) - true_count
+        return true_count >= false_count
+
+    def get_state(self) -> "LatchState":
+        """
+        Возвращает итоговое состояние на основе фильтрованных значений.
+        """
+        o = self.open_limit
+        c = self.close_limit
+
+        if o and not c:
             return LatchState.OPEN
-        elif not self.open_limit and self.close_limit:
+        elif not o and c:
             return LatchState.CLOSED
+
         return LatchState.ERROR
 
 
@@ -367,34 +410,33 @@ if __name__ == "__main__":
 
     for s in limit_switchers.values():
         s.start()
+
     distance_sensor.start()
     temp_sensor.start()
+
+    l1 = Latch()
+    l2 = Latch()
+
+    door = Door([l1, l2])
 
     try:
         while True:
             switchers_states = {k: v.get_state() for k, v in limit_switchers.items()}
+
+            l1.set_state(switchers_states["open_limit1"], switchers_states["close_limit1"])
+            l2.set_state(switchers_states["open_limit2"], switchers_states["close_limit2"])
+
             dist = distance_sensor.get_distance()
             temp = temp_sensor.get_temp()
 
             in_range = distance_sensor.is_in_range(50, 350)
-            sockets = list(switchers_states.values()) + [in_range]
+            # Формируем пакет
 
+            sockets = [l1.close_limit, l2.close_limit, l1.open_limit, l2.close_limit] + [in_range]
             packet = DeliverySensors(*sockets, temperatureSensor=temp)
 
-            l1 = Latch(
-                open_limit=switchers_states["open_limit1"],
-                close_limit=switchers_states["close_limit1"],
-            )
-            l2 = Latch(
-                open_limit=switchers_states["open_limit2"],
-                close_limit=switchers_states["close_limit2"],
-            )
-
-            door = Door([l1, l2])
-
-            logger.info(f"temp={temp}, dist={dist}, switches={switchers_states}")
-            logger.info(f"door={door.get_state().value}")
-            logger.debug(f"packet={packet}")
+            logger.info(f"temp={temp}, dist={dist}, {packet=}")
+            logger.info(f"{l1=} {l2=} door={door.get_state().value}")
 
             conn.send_sensors(packet)
             time.sleep(0.1)
