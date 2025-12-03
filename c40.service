@@ -7,7 +7,7 @@ WorkingDirectory=%WORKDIR%
 ExecStart=%WORKDIR%/.venv/bin/python %WORKDIR%/main.py
 Restart=always
 RestartSec=5
-User=pi
+User=root
 StandardOutput=journal
 StandardError=journal
 
