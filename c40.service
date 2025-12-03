@@ -1,0 +1,15 @@
+[Unit]
+Description=My Python App
+After=network.target
+
+[Service]
+WorkingDirectory=%WORKDIR%
+ExecStart=%WORKDIR%/.venv/bin/python %WORKDIR%/main.py
+Restart=always
+RestartSec=5
+User=pi
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
