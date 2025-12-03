@@ -432,7 +432,7 @@ if __name__ == "__main__":
             in_range = distance_sensor.is_in_range(50, 350)
             # Формируем пакет
 
-            sockets = [l1.close_limit, l2.close_limit, l1.open_limit, l2.close_limit] + [in_range]
+            sockets = [l1.close_limit, l2.close_limit, l1.open_limit, l2.open_limit] + [in_range]
             packet = DeliverySensors(*sockets, temperatureSensor=temp)
 
             logger.info(f"temp={temp}, dist={dist}, {packet=}")
