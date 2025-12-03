@@ -50,14 +50,22 @@ logger = setup_logger(logging.INFO)
 # 1. Концевик
 # ------------------------------------------------------------
 class LimitSwitchSensor(threading.Thread):
-    def __init__(self, pi, gpio, pud=pigpio.PUD_DOWN, invert_state_mode=False, interval=0.01):
+    def __init__(self, pi, gpio, pud=pigpio.PUD_DOWN,
+                 invert_state_mode=False,
+                 interval=0.01,
+                 debounce_ms=1000):
         super().__init__(daemon=True)
+
         self._pi = pi
         self._pin = gpio
         self._interval = interval
         self._stop = threading.Event()
-        self._state = None
-        self._invert_state_mode = invert_state_mode
+        self._invert = invert_state_mode
+
+        self._raw_state = None          # последнее необработанное чтение
+        self._stable_state = None       # подтверждённое состояние для пользователя
+        self._last_change_time = None   # время начала потенциального изменения
+        self._debounce_ms = debounce_ms
 
         try:
             self._pi.set_mode(self._pin, pigpio.INPUT)
@@ -66,9 +74,13 @@ class LimitSwitchSensor(threading.Thread):
             logger.error(f"GPIO init failed on pin {self._pin}: {e}")
 
     def get_state(self):
-        if self._state is None:
+        """
+        Возвращает подтверждённое (отфильтрованное) состояние.
+        """
+        if self._stable_state is None:
             return False
-        return (not self._state) if self._invert_state_mode else self._state
+
+        return (not self._stable_state) if self._invert else self._stable_state
 
     def stop(self):
         self._stop.set()
@@ -76,9 +88,32 @@ class LimitSwitchSensor(threading.Thread):
     def run(self):
         while not self._stop.is_set():
             try:
-                self._state = self._pi.read(self._pin)
+                new_raw = self._pi.read(self._pin)
+                current_time = time.time()
+
+                # Первое чтение: просто устанавливаем и продолжаем
+                if self._raw_state is None:
+                    self._raw_state = new_raw
+                    self._stable_state = new_raw
+                    self._last_change_time = current_time
+                    time.sleep(self._interval)
+                    continue
+
+                # Если сырое состояние изменилось относительно предыдущего
+                if new_raw != self._raw_state:
+                    self._raw_state = new_raw
+                    self._last_change_time = current_time  # фиксируем момент изменения
+
+                # Проверка: прошло ли время стабилизации
+                elapsed_ms = (current_time - self._last_change_time) * 1000
+                if elapsed_ms >= self._debounce_ms:
+                    # Состояние стабильно — можно подтвердить
+                    if self._stable_state != self._raw_state:
+                        self._stable_state = self._raw_state
+
             except Exception as e:
                 logger.error(f"LimitSwitchSensor read error (pin {self._pin}): {e}")
+
             time.sleep(self._interval)
 
 
@@ -354,12 +389,13 @@ if __name__ == "__main__":
 
     conn = MavlinkConnectionService()
 
+    debounce_ms = 5000
     limit_switchers = {
-        'close_limit1': LimitSwitchSensor(pi, gpio=22, invert_state_mode=True),
-        'close_limit2': LimitSwitchSensor(pi, gpio=23, invert_state_mode=True),
+        'close_limit1': LimitSwitchSensor(pi, gpio=22, invert_state_mode=True, debounce_ms=debounce_ms),
+        'close_limit2': LimitSwitchSensor(pi, gpio=23, invert_state_mode=True, debounce_ms=debounce_ms),
 
-        'open_limit1': LimitSwitchSensor(pi, gpio=24, invert_state_mode=True),
-        'open_limit2': LimitSwitchSensor(pi, gpio=25, invert_state_mode=True),
+        'open_limit1': LimitSwitchSensor(pi, gpio=24, invert_state_mode=True, debounce_ms=debounce_ms),
+        'open_limit2': LimitSwitchSensor(pi, gpio=25, invert_state_mode=True, debounce_ms=debounce_ms),
     }
 
     distance_sensor = DistanceSensor()
@@ -392,10 +428,8 @@ if __name__ == "__main__":
 
             door = Door([l1, l2])
 
-            logger.info(f"temp={temp}, dist={dist}, switches={switchers_states}")
-            logger.info(f"door={door.get_state().value}")
-            logger.debug(f"packet={packet}")
-
+            logger.info(f"temp={temp}, dist={dist} l1={l1.get_state()}, l2={l2.get_state()} door={door.get_state()}")
+            # logger.debug(f"{packet=}")
             conn.send_sensors(packet)
             time.sleep(0.1)
 
