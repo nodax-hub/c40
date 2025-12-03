@@ -419,6 +419,16 @@ def limits_from_state(l: Latch) -> tuple[bool, bool]:
     else:  # LatchState.ERROR
         return l.open_limit, l.close_limit
 
+def foo(l1, l2) -> list:
+    op1, cl1 = limits_from_state(l1)
+    op2, cl2 = limits_from_state(l2)
+
+    # close_limit1
+    # close_limit2
+    # open_limit1
+    # open_limit2
+    return [cl1, cl2, op1, op2]
+
 
 # ------------------------------------------------------------
 # MAIN
@@ -467,10 +477,9 @@ if __name__ == "__main__":
             in_range = distance_sensor.is_in_range(50, 350)
 
             # Формируем пакет
-            l1_s = limits_from_state(l1)
-            l2_s = limits_from_state(l2)
-
-            sockets = [*l1_s, *l2_s] + [in_range]
+            # TODO: нужно изменить структуру посылаемого пакета и слать состояние задвижек а не сырые данные концевиков
+            tmp = foo(l1, l2)
+            sockets = tmp + [in_range]
             packet = DeliverySensors(*sockets, temperatureSensor=temp)
 
             logger.info(f"temp={temp}, dist={dist}, {packet=}")
