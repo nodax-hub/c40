@@ -325,9 +325,11 @@ class Latch:
 
     _open_queue: Deque[bool] = field(init=False)
     _close_queue: Deque[bool] = field(init=False)
+    _error_queue: Deque[bool] = field(init=False)
 
     _open_state: bool = field(default=False, init=False)
     _close_state: bool = field(default=False, init=False)
+    _error_state: bool = field(default=False, init=False)
 
     def __post_init__(self):
         maxlen = int(self.dur / self.dt)
@@ -336,26 +338,37 @@ class Latch:
 
         self._open_queue = deque(maxlen=maxlen)
         self._close_queue = deque(maxlen=maxlen)
+        self._error_queue = deque(maxlen=maxlen)
 
     def set_state(self, open_limit: bool, close_limit: bool):
         self._open_queue.append(open_limit)
         self._close_queue.append(close_limit)
 
-        # Проверяем окно open
+        # Логика ошибки: неконсистентность входов
+        current_error = (open_limit == close_limit)
+        self._error_queue.append(current_error)
+
+        # Обновляем open
         if len(self._open_queue) == self._open_queue.maxlen:
             if all(self._open_queue):
                 self._open_state = True
             elif not any(self._open_queue):
                 self._open_state = False
-            # иначе состояние не меняем
 
-        # Проверяем окно close
+        # Обновляем close
         if len(self._close_queue) == self._close_queue.maxlen:
             if all(self._close_queue):
                 self._close_state = True
             elif not any(self._close_queue):
                 self._close_state = False
-            # иначе состояние не меняем
+
+        # Обновляем error
+        if len(self._error_queue) == self._error_queue.maxlen:
+            if all(self._error_queue):
+                self._error_state = True
+            elif not any(self._error_queue):
+                self._error_state = False
+            # иначе не меняем
 
     @property
     def open_limit(self) -> bool:
@@ -365,14 +378,20 @@ class Latch:
     def close_limit(self) -> bool:
         return self._close_state
 
-    def get_state(self):
-        o = self._open_state
-        c = self._close_state
+    @property
+    def error_limit(self) -> bool:
+        return self._error_state
 
-        if o and not c:
+    def get_state(self):
+        if self._error_state:
+            return LatchState.ERROR
+
+        if self._open_state and not self._close_state:
             return LatchState.OPEN
-        elif not o and c:
+
+        if not self._open_state and self._close_state:
             return LatchState.CLOSED
+
         return LatchState.ERROR
 
 
@@ -387,6 +406,18 @@ class Door:
         if len(set(states)) != 1:
             return LatchState.ERROR
         return states[0]
+
+
+def limits_from_state(l: Latch) -> tuple[bool, bool]:
+    """
+    Возвращает (open_limit, close_limit) согласно устойчивому состоянию.
+    """
+    if l.get_state() == LatchState.OPEN:
+        return True, False
+    elif l.get_state() == LatchState.CLOSED:
+        return False, True
+    else:  # LatchState.ERROR
+        return l.open_limit, l.close_limit
 
 
 # ------------------------------------------------------------
@@ -434,13 +465,16 @@ if __name__ == "__main__":
             temp = temp_sensor.get_temp()
 
             in_range = distance_sensor.is_in_range(50, 350)
-            # Формируем пакет
 
-            sockets = [l1.close_limit, l2.close_limit, l1.open_limit, l2.open_limit] + [in_range]
+            # Формируем пакет
+            l1_s = limits_from_state(l1)
+            l2_s = limits_from_state(l2)
+
+            sockets = [*l1_s, *l2_s] + [in_range]
             packet = DeliverySensors(*sockets, temperatureSensor=temp)
 
             logger.info(f"temp={temp}, dist={dist}, {packet=}")
-            logger.info(f"{l1=} {l2=} door={door.get_state().value}")
+            # logger.info(f"{l1=} {l2=} door={door.get_state().value}")
 
             conn.send_sensors(packet)
             time.sleep(dt)
