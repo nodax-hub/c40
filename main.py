@@ -320,15 +320,31 @@ class LatchState(Enum):
 maxsize: int = 10
 
 
+from dataclasses import dataclass, field
+from collections import deque
+from typing import Deque
+
+
 @dataclass
 class Latch:
-    # Очереди для фильтрации каждого канала
-    _open_queue: Deque[bool] = field(default_factory=lambda: deque(maxlen=maxsize))
-    _close_queue: Deque[bool] = field(default_factory=lambda: deque(maxlen=maxsize))
+    dt: float  # период обновления (секунды)
+    dur: float  # требуемое время стабильности (секунды)
+
+    _open_queue: Deque[bool] = field(init=False)
+    _close_queue: Deque[bool] = field(init=False)
+
+    def __post_init__(self):
+        # рассчитываем длину окна
+        maxlen = int(self.dur / self.dt)
+        if maxlen < 1:
+            maxlen = 1  # защита от нулевого окна
+
+        self._open_queue = deque(maxlen=maxlen)
+        self._close_queue = deque(maxlen=maxlen)
 
     def set_state(self, open_limit: bool, close_limit: bool):
         """
-        Сеттер состояния: добавляет новые значения в очереди.
+        Добавляет новые значения в очереди.
         """
         self._open_queue.append(open_limit)
         self._close_queue.append(close_limit)
@@ -336,32 +352,27 @@ class Latch:
     @property
     def open_limit(self) -> bool:
         """
-        Вычисляет устойчивое состояние open_limit на основе очереди.
-        Возвращает большинство значений.
+        Фильтрация majority vote.
         """
-        if not self._open_queue:
+        q = self._open_queue
+        if not q:
             return False
 
-        true_count = sum(self._open_queue)
-        false_count = len(self._open_queue) - true_count
+        true_count = sum(q)
+        false_count = len(q) - true_count
         return true_count >= false_count
 
     @property
     def close_limit(self) -> bool:
-        """
-        Аналогично open_limit.
-        """
-        if not self._close_queue:
+        q = self._close_queue
+        if not q:
             return False
 
-        true_count = sum(self._close_queue)
-        false_count = len(self._close_queue) - true_count
+        true_count = sum(q)
+        false_count = len(q) - true_count
         return true_count >= false_count
 
     def get_state(self) -> "LatchState":
-        """
-        Возвращает итоговое состояние на основе фильтрованных значений.
-        """
         o = self.open_limit
         c = self.close_limit
 
@@ -414,8 +425,9 @@ if __name__ == "__main__":
     distance_sensor.start()
     temp_sensor.start()
 
-    l1 = Latch()
-    l2 = Latch()
+    dt = 0.1
+    l1 = Latch(dt=dt,dur=1.5)
+    l2 = Latch(dt=dt, dur=1.5)
 
     door = Door([l1, l2])
 
@@ -439,7 +451,7 @@ if __name__ == "__main__":
             logger.info(f"{l1=} {l2=} door={door.get_state().value}")
 
             conn.send_sensors(packet)
-            time.sleep(0.1)
+            time.sleep(dt)
 
     except KeyboardInterrupt:
         pass
