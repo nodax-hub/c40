@@ -1,15 +1,7 @@
-Для конфигурации устройства:
+Команда для установки:
 
 ```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-Для установки и запуска демона сервиса:
-
-```bash
-chmod +x install.sh
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/nodax-hub/c40/refs/heads/master/install.sh | sudo bash
 ```
 
 Схема подключения:
